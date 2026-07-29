@@ -28,55 +28,36 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run pipeline
+      - name: Check MLflow configuration
         run: |
-          dvc repro
+          python - <<'PY'
+          import os
+          import mlflow
 
-      - name: Verify MLflow model download
+          print("Tracking URI:", mlflow.get_tracking_uri())
+          print("Username configured:", bool(os.getenv("MLFLOW_TRACKING_USERNAME")))
+          print("Password configured:", bool(os.getenv("MLFLOW_TRACKING_PASSWORD")))
+          PY
+
+      - name: Test model artifact download
         run: |
           python - <<'PY'
           import mlflow
 
-          print("MLflow URI:", mlflow.get_tracking_uri())
-          model = mlflow.pyfunc.load_model("models:/my_model/5")
-          print("Model downloaded successfully")
+          model_uri = "models:/my_model/5"
+          print("Downloading:", model_uri)
+          mlflow.artifacts.download_artifacts(artifact_uri=model_uri)
+          print("Artifact downloaded successfully")
           PY
 
+      - name: Run pipeline
+        run: dvc repro
+
       - name: Run model tests
-        run: |
-          python -m unittest tests/test_model.py
+        run: python -m unittest tests/test_model.py
 
       - name: Promote model to production
-        run: |
-          python scripts/promote_model.py
+        run: python scripts/promote_model.py
 
       - name: Run Flask app tests
-        run: |
-          python -m unittest tests/test_flask_app.py
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ secrets.AWS_REGION }}
-
-      - name: Login to Amazon ECR
-        uses: aws-actions/amazon-ecr-login@v2
-
-      - name: Build Docker image
-        run: |
-          docker build \
-            -t ${{ secrets.ECR_REPOSITORY }}:latest \
-            .
-
-      - name: Tag Docker image
-        run: |
-          docker tag \
-            ${{ secrets.ECR_REPOSITORY }}:latest \
-            ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/${{ secrets.ECR_REPOSITORY }}:latest
-
-      - name: Push Docker image to ECR
-        run: |
-          docker push \
-            ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/${{ secrets.ECR_REPOSITORY }}:latest
+        run: python -m unittest tests/test_flask_app.py
