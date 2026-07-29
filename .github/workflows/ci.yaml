@@ -1,77 +1,82 @@
 name: CI Pipeline
 
-on: push
+on:
+  push:
 
 jobs:
   project-testing:
     runs-on: ubuntu-latest
 
+    env:
+      CAPSTONE_TEST: ${{ secrets.CAPSTONE_TEST }}
+      MLFLOW_TRACKING_URI: https://dagshub.com/shubhamrangdal2000/MLOPS_CAPSTONE_Project.mlflow
+      MLFLOW_TRACKING_USERNAME: shubhamrangdal2000
+      MLFLOW_TRACKING_PASSWORD: ${{ secrets.DAGSHUB_TOKEN }}
+
     steps:
-      - name: checkout code
-        uses: actions/checkout@v3
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-      - name: setup python
-        uses: actions/setup-python@v2
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: "3.10"
+          cache: pip
 
-      - name: Cache pip dependencies
-        uses: actions/cache@v3
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-
-
-      - name: install dependencies
+      - name: Install dependencies
         run: |
+          python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: run pipeline
-        env:
-          CAPSTONE_TEST: ${{ secrets.CAPSTONE_TEST }}
+      - name: Run pipeline
         run: |
           dvc repro
 
+      - name: Verify MLflow model download
+        run: |
+          python - <<'PY'
+          import mlflow
+
+          print("MLflow URI:", mlflow.get_tracking_uri())
+          model = mlflow.pyfunc.load_model("models:/my_model/5")
+          print("Model downloaded successfully")
+          PY
+
       - name: Run model tests
-        env:
-          CAPSTONE_TEST: ${{ secrets.CAPSTONE_TEST }}
         run: |
           python -m unittest tests/test_model.py
 
       - name: Promote model to production
-        if: success()
-        env:
-          CAPSTONE_TEST: ${{ secrets.CAPSTONE_TEST }}
-        run: python scripts/promote_model.py
+        run: |
+          python scripts/promote_model.py
 
       - name: Run Flask app tests
-        if: success()
-        env:
-          CAPSTONE_TEST: ${{ secrets.CAPSTONE_TEST }}
-        run: python -m unittest tests/test_flask_app.py
-
-      - name: Login to AWS ECR
-        if: success()
         run: |
-            aws configure set aws_access_key_id ${{ secrets.AWS_ACCESS_KEY_ID }}
-            aws configure set aws_secret_access_key ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-            aws configure set region ${{ secrets.AWS_REGION }}
-            aws ecr get-login-password --region ${{ secrets.AWS_REGION }} | docker login --username AWS --password-stdin ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com
+          python -m unittest tests/test_flask_app.py
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
 
       - name: Build Docker image
         run: |
-            docker build -t ${{ secrets.ECR_REPOSITORY }}:latest .
+          docker build \
+            -t ${{ secrets.ECR_REPOSITORY }}:latest \
+            .
 
       - name: Tag Docker image
         run: |
-            docker tag ${{ secrets.ECR_REPOSITORY }}:latest \
+          docker tag \
+            ${{ secrets.ECR_REPOSITORY }}:latest \
             ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/${{ secrets.ECR_REPOSITORY }}:latest
-
-    
-      - name: Check Docker Authentication
-        run: docker info
 
       - name: Push Docker image to ECR
         run: |
-          docker push ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/${{ secrets.ECR_REPOSITORY }}:latest
+          docker push \
+            ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/${{ secrets.ECR_REPOSITORY }}:latest
