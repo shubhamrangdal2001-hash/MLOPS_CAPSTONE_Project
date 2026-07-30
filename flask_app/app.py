@@ -115,17 +115,42 @@ PREDICTION_COUNT = Counter(
 model_name = "my_model"
 def get_latest_model_version(model_name):
     client = mlflow.MlflowClient()
-    latest_version = client.get_latest_versions(model_name, stages=["Production"])
-    if not latest_version:
-        latest_version = client.get_latest_versions(model_name, stages=["Staging"])
-    if not latest_version:
-        latest_version = client.get_latest_versions(model_name, stages=["None"])
-    return latest_version[0].version if latest_version else None
+    try:
+        versions = client.search_model_versions(f"name='{model_name}'")
+        for stage in ["Production", "Staging", "None"]:
+            matching = [v for v in versions if v.current_stage and v.current_stage.lower() == stage.lower()]
+            if matching:
+                matching.sort(key=lambda x: int(x.version), reverse=True)
+                return matching[0].version
+    except Exception:
+        pass
 
-model_version = get_latest_model_version(model_name)
-model_uri = f'models:/{model_name}/{model_version}'
-print(f"Fetching model from: {model_uri}")
-model = mlflow.pyfunc.load_model(model_uri)
+    for stage in ["Production", "Staging", "None"]:
+        try:
+            latest_version = client.get_latest_versions(model_name, stages=[stage])
+            if latest_version:
+                return latest_version[0].version
+        except Exception:
+            pass
+    return None
+
+model = None
+try:
+    model_version = get_latest_model_version(model_name)
+    if model_version:
+        model_uri = f'models:/{model_name}/{model_version}'
+        print(f"Fetching model from: {model_uri}")
+        model = mlflow.pyfunc.load_model(model_uri)
+except Exception as e:
+    print(f"Warning: Failed to load model from MLflow registry ({e}). Falling back to local model.")
+
+if model is None:
+    if os.path.exists('models/model.pkl'):
+        print("Loading fallback model from models/model.pkl")
+        model = pickle.load(open('models/model.pkl', 'rb'))
+    else:
+        raise RuntimeError("Could not load model from MLflow registry or local fallback models/model.pkl.")
+
 vectorizer = pickle.load(open('models/vectorizer.pkl', 'rb'))
 
 # Routes
