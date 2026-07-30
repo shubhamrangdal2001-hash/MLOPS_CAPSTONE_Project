@@ -83,7 +83,7 @@ jobs:
       
       - name: Update kubeconfig
         run: |
-          aws eks update-kubeconfig --region us-east-1 --name flask-app-cluster
+          aws eks update-kubeconfig --region ${{ secrets.AWS_REGION }} --name flask-app-cluster
 
       - name: Create Kubernetes Secret
         run: |
@@ -92,4 +92,5 @@ jobs:
 
       - name: Deploy to EKS
         run: |
+          sed -i "s|020866158197.dkr.ecr.eu-north-1.amazonaws.com/flask-app:latest|${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/${{ secrets.ECR_REPOSITORY }}:latest|g" deployment.yaml
           kubectl apply -f deployment.yaml
