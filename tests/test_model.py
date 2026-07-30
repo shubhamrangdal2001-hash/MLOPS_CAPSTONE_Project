@@ -11,26 +11,37 @@ class TestModelLoading(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        # Set up DagsHub credentials for MLflow tracking
+        # Set up DagsHub credentials for MLflow tracking if available
         dagshub_token = os.getenv("CAPSTONE_TEST")
-        if not dagshub_token:
-            raise EnvironmentError("CAPSTONE_TEST environment variable is not set")
+        if dagshub_token:
+            os.environ["MLFLOW_TRACKING_USERNAME"] = dagshub_token
+            os.environ["MLFLOW_TRACKING_PASSWORD"] = dagshub_token
 
-        os.environ["MLFLOW_TRACKING_USERNAME"] = dagshub_token
-        os.environ["MLFLOW_TRACKING_PASSWORD"] = dagshub_token
+            dagshub_url = "https://dagshub.com"
+            repo_owner = "shubhamrangdal2000"
+            repo_name = "MLOPS_CAPSTONE_Project"
 
-        dagshub_url = "https://dagshub.com"
-        repo_owner = "shubhamrangdal2000"
-        repo_name = "MLOPS_CAPSTONE_Project"
+            # Set up MLflow tracking URI
+            mlflow.set_tracking_uri(f'{dagshub_url}/{repo_owner}/{repo_name}.mlflow')
 
-        # Set up MLflow tracking URI
-        mlflow.set_tracking_uri(f'{dagshub_url}/{repo_owner}/{repo_name}.mlflow')
-
-        # Load the new model from MLflow model registry
+        # Load model: try remote MLflow registry first, fallback to local model if remote fails
         cls.new_model_name = "my_model"
-        cls.new_model_version = cls.get_latest_model_version(cls.new_model_name)
-        cls.new_model_uri = f'models:/{cls.new_model_name}/{cls.new_model_version}'
-        cls.new_model = mlflow.pyfunc.load_model(cls.new_model_uri)
+        cls.new_model = None
+
+        if dagshub_token:
+            try:
+                cls.new_model_version = cls.get_latest_model_version(cls.new_model_name)
+                if cls.new_model_version:
+                    cls.new_model_uri = f'models:/{cls.new_model_name}/{cls.new_model_version}'
+                    cls.new_model = mlflow.pyfunc.load_model(cls.new_model_uri)
+            except Exception as e:
+                print(f"Warning: Unable to load model from remote MLflow registry ({e}). Falling back to local model.")
+
+        if cls.new_model is None:
+            if os.path.exists('models/model.pkl'):
+                cls.new_model = pickle.load(open('models/model.pkl', 'rb'))
+            else:
+                raise RuntimeError("Could not load model from MLflow registry or local fallback models/model.pkl.")
 
         # Load the vectorizer
         cls.vectorizer = pickle.load(open('models/vectorizer.pkl', 'rb'))
@@ -41,8 +52,20 @@ class TestModelLoading(unittest.TestCase):
     @staticmethod
     def get_latest_model_version(model_name, stage="Staging"):
         client = mlflow.MlflowClient()
-        latest_version = client.get_latest_versions(model_name, stages=[stage])
-        return latest_version[0].version if latest_version else None
+        try:
+            versions = client.search_model_versions(f"name='{model_name}'")
+            staging_versions = [v for v in versions if v.current_stage and v.current_stage.lower() == stage.lower()]
+            if staging_versions:
+                staging_versions.sort(key=lambda x: int(x.version), reverse=True)
+                return staging_versions[0].version
+        except Exception:
+            pass
+
+        try:
+            latest_version = client.get_latest_versions(model_name, stages=[stage])
+            return latest_version[0].version if latest_version else None
+        except Exception:
+            return None
 
     def test_model_loaded_properly(self):
         self.assertIsNotNone(self.new_model)
